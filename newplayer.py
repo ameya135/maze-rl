@@ -154,7 +154,7 @@ class Maze:
 
 
 # Example usage
-level_example = [
+ evel_example = [
     "XXXXXXXXXXXXXXXXXXXXXXXXX",
     "X XXXXXXXX          XXXXX",
     "X XXXXXXXX  XXXXXX  XXXXX",

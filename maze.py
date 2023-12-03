@@ -7,6 +7,7 @@ from torch.distributions import Categorical
 
 from functools import partial
 import torch.nn.functional as F
+
 # Constants
 GAME_HEIGHT = 600
 GAME_WIDTH = 600
@@ -42,6 +43,8 @@ level = [
     "XXXX                    X",
     "XXXXXXXXXXXXXXXXXXXXXXXXX",
 ]
+
+
 def create_env():
     env = Maze(
         level,
@@ -49,9 +52,11 @@ def create_env():
         MAZE_HEIGHT=GAME_HEIGHT,
         MAZE_WIDTH=GAME_WIDTH,
         SIZE=NUMBER_OF_TILES,
-        hidden_size=64
+        hidden_size=64,
     )
     return env
+
+
 env = create_env()
 # Initialize Pygame
 pygame.init()
@@ -69,23 +74,25 @@ treasure_pos = env.goal_pos
 player_pos = env.state
 
 # Create the neural network
-neural_network = MazeSolverNetwork(input_size=2, hidden_size=64, output_size=4)
-optimizer = torch.optim.Adam(neural_network.parameters(), lr=0.001)
+neural_network = MazeSolverNetwork(input_size=2, hidden_size=512, output_size=4)
+optimizer = torch.optim.Adam(neural_network.parameters(), lr=0.0001)
+
 
 def train(model, env, learning_rate, hidden_size, num_cycles):
-    learning_rate=-1.001
-    hidden_size=32
-    num_cycles=10
+    learning_rate = 0.000001
+    hidden_size = 32
+    num_cycles = 10
+
 
 def reset_goal():
     if env.state == env.goal_pos:
         env.reset_goal()
         env.solve()
 
+
 # Game loop
 
 while running:
-
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -129,13 +136,12 @@ while running:
         surface, ((SCREEN_HEIGHT - GAME_HEIGHT) / 2, (SCREEN_WIDTH - GAME_WIDTH) / 2)
     )
     pygame.display.flip()
-    
-    env.exploratory_policy(env.state, epsilon=0.3, wall_penalty=-0.5)
+
+    env.exploratory_policy(env.state)
     action_logits = neural_network(env.state_to_tensor(player_pos))
     action_probs = F.softmax(action_logits, dim=-1).squeeze()
     m = Categorical(action_probs)
     action = m.sample().item()
-
 
     if (
         action == 1
@@ -166,13 +172,17 @@ while running:
         player_pos = (player_pos[0], player_pos[1] + 1)
         env.state = player_pos
 
-     
-    #env.solve_with_neural_network(gamma=0.5, epsilon=0.3, episodes=10)
+    # env.solve_with_neural_network(gamma=0.5, epsilon=0.3, episodes=10)
 
-    env.train_network(player_pos, action, env._get_next_state(player_pos, action), env.compute_reward(player_pos, action))
+    env.train_network(
+        player_pos,
+        action,
+        env._get_next_state(player_pos, action),
+        env.compute_reward(player_pos, action),
+    )
     optimizer.zero_grad()
     env.optimizer.step()
-    
+
     print(env.state)
     reset_goal()
     clock.tick(60)
