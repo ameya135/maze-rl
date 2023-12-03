@@ -1,3 +1,4 @@
+
 import pygame
 import numpy as np
 from player import Maze
@@ -5,8 +6,8 @@ import torch
 from model import MazeSolverNetwork
 from torch.distributions import Categorical
 
-from functools import partial
 import torch.nn.functional as F
+
 # Constants
 GAME_HEIGHT = 600
 GAME_WIDTH = 600
@@ -30,7 +31,7 @@ level = [
     "X             XXXXXXXXXXX",
     "XXXXXXXXXXX      XXXXX  X",
     "XXXXXXXXXXXXXXX  XXXXX  X",
-    "XXXP XXXXXXXXXX         X",
+    "XXX XXXXXXXXXX         X",
     "XXX                     X",
     "XXX         XXXXXXXXXXXXX",
     "XXXXXXXXXX  XXXXXXXXXXXXX",
@@ -38,10 +39,12 @@ level = [
     "XX   XXXXX              X",
     "XX   XXXXXXXXXXXXX  XXXXX",
     "XX    XXXXXXXXXXXX  XXXXX",
-    "XX        XXXX          X",
+    "XXP        XXXX          X",
     "XXXX                    X",
     "XXXXXXXXXXXXXXXXXXXXXXXXX",
 ]
+
+
 def create_env():
     env = Maze(
         level,
@@ -49,9 +52,11 @@ def create_env():
         MAZE_HEIGHT=GAME_HEIGHT,
         MAZE_WIDTH=GAME_WIDTH,
         SIZE=NUMBER_OF_TILES,
-        hidden_size=64
+        hidden_size=64,
     )
     return env
+
+
 env = create_env()
 # Initialize Pygame
 pygame.init()
@@ -62,7 +67,7 @@ pygame.display.set_caption("Maze Solver")
 
 surface = pygame.Surface((GAME_HEIGHT, GAME_WIDTH))
 clock = pygame.time.Clock()
-running = True
+running = 0
 
 # Get the initial player and goal positions
 treasure_pos = env.goal_pos
@@ -72,19 +77,35 @@ player_pos = env.state
 neural_network = MazeSolverNetwork(input_size=2, hidden_size=64, output_size=4)
 optimizer = torch.optim.Adam(neural_network.parameters(), lr=0.001)
 
+
 def train(model, env, learning_rate, hidden_size, num_cycles):
-    learning_rate=-1.001
-    hidden_size=32
-    num_cycles=10
+    for cycle in range(1):
+        state = env.reset_state()
+        done = False
+        while not done:
+            action_logits = model(env.state_to_tensor(state))
+            action_probs = F.softmax(action_logits, dim=-1).squeeze()
+            m = Categorical(action_probs)
+            #action = m.sample().item()
+
+            action = env.exploratory_policy(state, 0.5)
+            next_state, reward, done = env.step(action)
+
+            # Your training logic here
+            # You may need to adapt the code based on your specific training requirements
+            # Example: model.train_network(state, action, next_state, reward, learning_rate)
+
+            state = next_state
+
 
 def reset_goal():
     if env.state == env.goal_pos:
         env.reset_goal()
         env.solve()
 
-# Game loop
 
-while running:
+# Game loop
+while running <= 10:
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -129,13 +150,13 @@ while running:
         surface, ((SCREEN_HEIGHT - GAME_HEIGHT) / 2, (SCREEN_WIDTH - GAME_WIDTH) / 2)
     )
     pygame.display.flip()
-    
-    env.exploratory_policy(env.state, epsilon=0.3, wall_penalty=-0.5)
+
+    train(neural_network, env, learning_rate=-1.001, hidden_size=32, num_cycles=10)
+
     action_logits = neural_network(env.state_to_tensor(player_pos))
     action_probs = F.softmax(action_logits, dim=-1).squeeze()
     m = Categorical(action_probs)
     action = m.sample().item()
-
 
     if (
         action == 1
@@ -165,17 +186,9 @@ while running:
     ):
         player_pos = (player_pos[0], player_pos[1] + 1)
         env.state = player_pos
-
-     
-    #env.solve_with_neural_network(gamma=0.5, epsilon=0.3, episodes=10)
-
-    env.train_network(player_pos, action, env._get_next_state(player_pos, action), env.compute_reward(player_pos, action))
-    optimizer.zero_grad()
-    env.optimizer.step()
-    
     print(env.state)
-    reset_goal()
-    clock.tick(60)
-    running += 1
+    #reset_goal()
+    clock.tick(100)
+    
 
 pygame.quit()

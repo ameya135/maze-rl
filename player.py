@@ -1,15 +1,17 @@
 import numpy as np
+
+from scipy.stats import norm
 import random
 import torch
 import torch.optim as optim
 from typing import Tuple
 from tqdm.auto import tqdm
-from model import MazeSolverNetwork
+from model import MazeSolverNetwork, LinearQTrainer
 import torch.nn.functional as F
 
 class Maze:
     def __init__(
-        self, level, goal_pos: Tuple[int, int], MAZE_HEIGHT=600, MAZE_WIDTH=600, SIZE=25
+        self, level, goal_pos: Tuple[int, int], MAZE_HEIGHT=600, MAZE_WIDTH=600, SIZE=25, hidden_size=64
     ):
         """
         Maze class to represent a simple maze environment.
@@ -37,11 +39,11 @@ class Maze:
 
         self.network = MazeSolverNetwork(
             input_size=2,  # input size (row, col)
-            hidden_size=64,  # adjust as needed
+            hidden_size=hidden_size,  # adjust as needed
             output_size=4,  # 4 possible actions
         )
         self.optimizer = optim.Adam(self.network.parameters(), lr=0.001)
-
+        self.trainer = LinearQTrainer(model=self.network, learning_rate=1.001, gamma=0.99)
 
     def state_to_tensor(self, state):
         return torch.tensor([state[0] / self.number_of_tiles, state[1] / self.number_of_tiles], dtype=torch.float32)
@@ -65,6 +67,9 @@ class Maze:
                 elif level[row][col] == "X":
                     walls.append((row, col))
         return maze, walls
+    
+    def is_collision(self, next_state) -> bool:
+        return (next_state) in self.walls
 
     def get_init_state(self, level):
         """
@@ -81,6 +86,7 @@ class Maze:
                 if level[row][col] == "P":
                     return (row, col)
 
+
     def compute_reward(self, state: Tuple[int, int], action: int):
         """
         Compute the reward for taking an action from the current state.
@@ -93,8 +99,31 @@ class Maze:
             float: The reward for taking the action from the current state.
         """
         next_state = self._get_next_state(state, action)
-        return -float(state != self.goal_pos)
 
+        # Check if the next state is the goal
+        if next_state == self.goal_pos:
+            return 10.0  # A positive reward for reaching the goal
+
+        # Check if the next state results in a collision
+        if self.is_collision(next_state):
+            return -5.0  # A negative reward for collisions
+
+        # Calculate distance to the goal in the next state
+        distance_to_goal = self.calculate_distance_to_goal(next_state)
+
+        # Define a reward function based on distance (you can customize this)
+        reward = max(0, 1.0 - 0.01 * distance_to_goal)
+
+        return reward
+
+    def calculate_distance_to_goal(self, state: Tuple[int, int]):
+        # Replace this with your actual distance calculation to the goal
+        # This is a placeholder function; you need to implement a meaningful distance calculation.
+        goal_row, goal_col = self.goal_pos
+        current_row, current_col = state
+        distance = abs(goal_row - current_row) + abs(goal_col - current_col)
+        return distance
+    
     def step(self, action):
         """
         Take a step in the maze environment.
@@ -189,14 +218,49 @@ class Maze:
         av = self.action_values[state]
         return np.random.choice(np.flatnonzero(av == av.max()))
 
-    def exploratory_policy(self, state, epsilon):
+
+
+    def exploratory_policy(self, state, epsilon=0.3, wall_penalty=-0.5):
         if np.random.rand() < epsilon:
             return np.random.randint(4)
-
         else:
             av = self.action_values[state]
-            return np.random.choice(np.flatnonzero(av == av.max()))
 
+            # Calculate Bayesian distance for each act0.5n
+            bayesian_distances = []
+            for action in range(len(av)):
+                next_state = self._get_next_state(state, action)
+                if self.is_collision(next_state):
+                    # Penalize the exploratory policy for hitting the wall
+                    bayesian_distances.append(wall_penalty)
+                else:
+                    # Calculate Bayesian distance (replace this with your actual Bayesian distance calculation)
+                    bayesian_distance = self.calculate_bayesian_distance(state, action)
+                    bayesian_distances.append(bayesian_distance)
+
+            # Choose the action based on Bayesian distances
+            action_probs = np.exp(bayesian_distances - np.max(bayesian_distances))
+            action_probs /= np.sum(action_probs)
+            chosen_action = np.random.choice(range(len(av)), p=action_probs)
+
+            return chosen_action
+
+    def calculate_bayesian_distance(self, state, action):
+        # Replace this with your actual Bayesian distance calculation
+        # For example, you might use a Bayesian model to estimate the distance.
+        # Here, we'll use a placeholder calculation.
+        mean_distance = 0.5  # Replace with your model's output or calculation
+        std_dev_distance = 0.2  # Replace with your model's output or calculation
+        current_distance = self.calculate_distance(state, action)  # Replace with your actual distance calculation
+        bayesian_distance = norm.pdf(current_distance, loc=mean_distance, scale=std_dev_distance)
+        return bayesian_distance
+
+    def calculate_distance(self, state, action):
+        # Replace this with your actual distance calculation
+        # This is a placeholder function; you need to implement a meaningful distance calculation.
+        return 0.0
+
+        
     def sarsa(self, gamma=0.99, alpha=0.2, epsilon=0.3, episodes=1000):
         init_state = self.state
         self.action_values = np.zeros((self.number_of_tiles, self.number_of_tiles, 4))
@@ -231,25 +295,10 @@ class Maze:
 
 
     def train_network(self, state, action, next_state, reward, gamma=0.99):
-        self.optimizer.zero_grad()
+        self.trainer.train_step(state, action, reward, next_state, done=False) 
+        
 
-        state_tensor = self.state_to_tensor(state)
-        next_state_tensor = self.state_to_tensor(next_state)
-
-        q_values = self.network(state_tensor)
-        q_value = q_values[action]
-
-        next_q_values = self.network(next_state_tensor)
-        next_q_value = torch.max(next_q_values)
-
-        target = reward + gamma * next_q_value
-        loss = F.mse_loss(q_value, target)
-
-        loss.backward()
-        self.optimizer.step()
-
-
-    def solve_with_neural_network(self, gamma=0.99, epsilon=0.3, episodes=1000):
+    def solve_with_neural_network(self, gamma=0.99, epsilon=0.3, episodes=1):
         init_state = self.state
         for _ in tqdm(range(episodes)):
             done = False
@@ -258,7 +307,7 @@ class Maze:
                 state_tensor = self.state_to_tensor(state)
                 q_values = self.network(state_tensor)
                 
-                action = self.exploratory_policy(state, epsilon)
+                action = self.exploratory_policy(state, epsilon, wall_penalty=-1)
                 next_state, reward, done = self.simulate_step(state, action)
 
                 next_state_tensor = self.state_to_tensor(next_state)
@@ -277,43 +326,4 @@ class Maze:
 
 
 
-class LinearQTrainer:
-    """Using the model to implement training, this method will be customisable in the future"""
 
-    def __init__(self, model, learning_rate, gamma):
-        self.learning_rate = learning_rate
-        self.gamma = gamma
-        self.model = model
-        self.optimizer = optim.Adam(model.parameters(), lr=self.learning_rate)
-        self.criterion = nn.MSELoss()
-
-    def train_step(self, state, action, reward, next_state, done):
-        state = torch.tensor(state, dtype=torch.float)
-        next_state = torch.tensor(next_state, dtype=torch.float)
-        action = torch.tensor(action, dtype=torch.long)
-        reward = torch.tensor(reward, dtype=torch.float)
-
-        if len(state.shape) == 1:
-            state = torch.unsqueeze(state, 0)
-            next_state = torch.unsqueeze(next_state, 0)
-            action = torch.unsqueeze(action, 0)
-            reward = torch.unsqueeze(reward, 0)
-            done = (done,)
-
-        pred = self.model(state)
-
-        target = pred.clone()
-        for idx in range(len(done)):
-            Q_new = reward[idx]
-            if not done[idx]:
-                Q_new = reward[idx] + self.gamma * torch.max(
-                    self.model(next_state[idx])
-                )
-
-            target[idx][torch.argmax(action[idx]).item()] = Q_new
-
-        self.optimizer.zero_grad()
-        loss = self.criterion(target, pred)
-        loss.backward()
-
-        self.optimizer.step()
