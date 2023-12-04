@@ -8,10 +8,18 @@ from typing import Tuple
 from tqdm.auto import tqdm
 from model import MazeSolverNetwork, LinearQTrainer
 import torch.nn.functional as F
+import networkx as nx
+
 
 class Maze:
     def __init__(
-        self, level, goal_pos: Tuple[int, int], MAZE_HEIGHT=600, MAZE_WIDTH=600, SIZE=25, hidden_size=64
+        self,
+        level,
+        goal_pos: Tuple[int, int],
+        MAZE_HEIGHT=600,
+        MAZE_WIDTH=600,
+        SIZE=25,
+        hidden_size=64,
     ):
         """
         Maze class to represent a simple maze environment.
@@ -43,10 +51,15 @@ class Maze:
             output_size=4,  # 4 possible actions
         )
         self.optimizer = optim.Adam(self.network.parameters(), lr=0.001)
-        self.trainer = LinearQTrainer(model=self.network, learning_rate=1.001, gamma=0.99)
+        self.trainer = LinearQTrainer(
+            model=self.network, learning_rate=0.00000001, gamma=0.99
+        )
 
     def state_to_tensor(self, state):
-        return torch.tensor([state[0] / self.number_of_tiles, state[1] / self.number_of_tiles], dtype=torch.float32)
+        return torch.tensor(
+            [state[0] / self.number_of_tiles, state[1] / self.number_of_tiles],
+            dtype=torch.float32,
+        )
 
     def create_maze(self, level):
         """
@@ -67,7 +80,7 @@ class Maze:
                 elif level[row][col] == "X":
                     walls.append((row, col))
         return maze, walls
-    
+
     def is_collision(self, next_state) -> bool:
         return (next_state) in self.walls
 
@@ -85,7 +98,6 @@ class Maze:
             for col in range(len(level[row])):
                 if level[row][col] == "P":
                     return (row, col)
-
 
     def compute_reward(self, state: Tuple[int, int], action: int):
         """
@@ -113,8 +125,17 @@ class Maze:
 
         # Define a reward function based on distance (you can customize this)
         reward = max(0, 1.0 - 0.01 * distance_to_goal)
-
+        print(f"reward:{reward}")
         return reward
+
+    # def calculate_euclidean_distance(self, state, goal: list[int]):
+    #     state_row, state_col = state
+    #     goal_row, goal_col = goal
+
+    #     euclidean_distance = (
+    #         (state_row - goal_row) ** 2 + (state_col - goal_col) ** 2
+    #     ) ** 0.5
+    #     return euclidean_distance
 
     def calculate_distance_to_goal(self, state: Tuple[int, int]):
         # Replace this with your actual distance calculation to the goal
@@ -123,7 +144,7 @@ class Maze:
         current_row, current_col = state
         distance = abs(goal_row - current_row) + abs(goal_col - current_col)
         return distance
-    
+
     def step(self, action):
         """
         Take a step in the maze environment.
@@ -218,49 +239,71 @@ class Maze:
         av = self.action_values[state]
         return np.random.choice(np.flatnonzero(av == av.max()))
 
+    # def exploratory_policy(self, state, epsilon=0.3, wall_penalty=-0.5):
+    #     if np.random.rand() < epsilon:
+    #         return np.random.randint(4)
+    #     else:
+    #         av = self.action_values[state]
 
+    #         # Calculate Bayesian distance for each act0.5n
+    #         bayesian_distances = []
+    #         for action in range(len(av)):
+    #             next_state = self._get_next_state(state, action)
+    #             if self.is_collision(next_state):
+    #                 # Penalize the exploratory policy for hitting the wall
+    #                 bayesian_distances.append(wall_penalty)
+    #             else:
+    #                 bayesian_distance = self.calculate_euclidean_distance(state, action)
+    #                 bayesian_distances.append(bayesian_distance)
 
-    def exploratory_policy(self, state, epsilon=0.3, wall_penalty=-0.5):
-        if np.random.rand() < epsilon:
-            return np.random.randint(4)
-        else:
-            av = self.action_values[state]
+    #         # Choose the action based on Bayesian distances
+    #         action_probs = np.exp(bayesian_distances - np.max(bayesian_distances))
+    #         action_probs /= np.sum(action_probs)
+    #         chosen_action = np.random.choice(range(len(av)), p=action_probs)
 
-            # Calculate Bayesian distance for each act0.5n
-            bayesian_distances = []
-            for action in range(len(av)):
-                next_state = self._get_next_state(state, action)
-                if self.is_collision(next_state):
-                    # Penalize the exploratory policy for hitting the wall
-                    bayesian_distances.append(wall_penalty)
-                else:
-                    # Calculate Bayesian distance (replace this with your actual Bayesian distance calculation)
-                    bayesian_distance = self.calculate_bayesian_distance(state, action)
-                    bayesian_distances.append(bayesian_distance)
+    #         return chosen_action
 
-            # Choose the action based on Bayesian distances
-            action_probs = np.exp(bayesian_distances - np.max(bayesian_distances))
-            action_probs /= np.sum(action_probs)
-            chosen_action = np.random.choice(range(len(av)), p=action_probs)
+    def exploratory_policy(self, state, c=8):
+        ucb_values = np.zeros(4)
+        total_visits = np.sum(self.policy_probs[state]) + 1e-6  # Avoid division by zero
 
-            return chosen_action
+        for action in range(4):
+            if self.is_collision(self._get_next_state(state, action)):
+                ucb_values[action] = -np.inf
+            else:
+                action_visits = (
+                    np.sum(self.policy_probs[state, action]) + 1e-6
+                )  # Avoid division by zero
+                exploitation_term = self.action_values[state][action]
 
-    def calculate_bayesian_distance(self, state, action):
-        # Replace this with your actual Bayesian distance calculation
-        # For example, you might use a Bayesian model to estimate the distance.
-        # Here, we'll use a placeholder calculation.
-        mean_distance = 0.5  # Replace with your model's output or calculation
-        std_dev_distance = 0.2  # Replace with your model's output or calculation
-        current_distance = self.calculate_distance(state, action)  # Replace with your actual distance calculation
-        bayesian_distance = norm.pdf(current_distance, loc=mean_distance, scale=std_dev_distance)
-        return bayesian_distance
+                # Calculate Euclidean distance as a factor in exploration term
+                euclidean_distance = self.calculate_euclidean_distance(state, action)
+                exploration_term = (
+                    c * np.sqrt(np.log(total_visits) / action_visits)
+                    + euclidean_distance
+                )
+
+                ucb_values[action] = exploitation_term + exploration_term
+
+        chosen_action = np.argmax(ucb_values)
+        return chosen_action
+
+    def calculate_euclidean_distance(self, state, action):
+        # Get the coordinates of the current state and action
+        state_row, state_col = state
+        action_row, action_col = self._get_next_state(state, action)
+
+        # Calculate Euclidean distance
+        euclidean_distance = (
+            (state_row - action_row) ** 2 + (state_col - action_col) ** 2
+        ) ** 0.5
+        return euclidean_distance
 
     def calculate_distance(self, state, action):
         # Replace this with your actual distance calculation
         # This is a placeholder function; you need to implement a meaningful distance calculation.
         return 0.0
 
-        
     def sarsa(self, gamma=0.99, alpha=0.2, epsilon=0.3, episodes=1000):
         init_state = self.state
         self.action_values = np.zeros((self.number_of_tiles, self.number_of_tiles, 4))
@@ -293,10 +336,8 @@ class Maze:
 
         return self.state
 
-
     def train_network(self, state, action, next_state, reward, gamma=0.99):
-        self.trainer.train_step(state, action, reward, next_state, done=False) 
-        
+        self.trainer.train_step(state, action, reward, next_state, done=False)
 
     def solve_with_neural_network(self, gamma=0.99, epsilon=0.3, episodes=1):
         init_state = self.state
@@ -306,7 +347,7 @@ class Maze:
             while not done:
                 state_tensor = self.state_to_tensor(state)
                 q_values = self.network(state_tensor)
-                
+
                 action = self.exploratory_policy(state, epsilon, wall_penalty=-1)
                 next_state, reward, done = self.simulate_step(state, action)
 
@@ -322,8 +363,3 @@ class Maze:
                 self.optimizer.step()
 
                 state = next_state
-
-
-
-
-
