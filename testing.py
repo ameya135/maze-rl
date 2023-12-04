@@ -1,5 +1,5 @@
 
-from pyrlkit.agents.snake_agent import (
+from maze import (
     create_env,
     create_model,
     train,
